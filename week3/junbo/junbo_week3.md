@@ -50,8 +50,143 @@ val result = runCatching { riskyOperation() }
 - DB 질의나 파일 입출력 등에서 발생할 수 있는 에러를 runCatching으로 감싸면 로직 분리가 깔끔해집니다.
 - 참고 자료: https://toss.tech/article/21010
 
-## 3. 코루틴(Coroutine) 추가 예시
-- 비동기 HTTP 요청(예: Ktor 클라이언트)과 결합
+## 3. 코루틴(Coroutine)이란? 
+코루틴은 경량화된 스레드(협력 루틴) 개념으로, 
+자바 가상 머신 JVM 스레드 대비 컨텍스트 스위칭 비용이 적어 비동기 작업에 유리합니다. 
+자바스크립트의 비동기 처리(Promise, async/await)와 비슷한 면이 있지만, 
+훨씬 더 다양한 스코프와 제어 방식을 제공하는 점이 특징입니다.
+특히 runBlocking, launch, async 등 같은 코루틴 빌더들을 사용해 동시성을 간단하게 구현가능 합니다.
+
+#### Job
+- Job은 “코루틴 작업의 생명주기“를 다루는 핸들러(handler) 객체입니다.
+- 코루틴 빌더(launch, async)를 호출하면 내부적으로 Job이 생성됩니다.
+- 이 Job을 통해 취소(cancel) 하거나, 상태(활성/완료 등)를 확인할 수 있습니다.
+- 부모 Job이 취소되면 **자식 Job(코루틴)**도 자동으로 취소됩니다.
+
+```kotlin
+// 예: Job을 직접 제어하는 간단한 예시
+val parentJob = Job()
+
+val scope = CoroutineScope(Dispatchers.Default + parentJob)
+
+scope.launch {
+    println("자식 코루틴 1 시작")
+    delay(3000)
+    println("자식 코루틴 1 완료")
+}
+
+scope.launch {
+    println("자식 코루틴 2 시작")
+    delay(2000)
+    println("자식 코루틴 2 완료")
+}
+
+// 1초 뒤에 부모 Job을 취소 -> 자식들도 즉시 중단
+Thread.sleep(1000)
+parentJob.cancel()
+println("부모 Job 취소 -> 모든 자식 코루틴 중단")
+```
+#### Dispatchers
+Dispatcher는 “코루틴이 어떤 스레드 풀에서 동작할지” 결정하는 요소입니다.
+
+•	Dispatchers.Default
+- CPU 집중 연산에 최적화된 스레드 풀
+- 	CPU 코어 수를 기반으로 동시성 처리
+
+•	Dispatchers.IO
+- I/O 작업(네트워크, 파일 입출력 등)에 최적화된 스레드 풀
+- 동시 I/O를 더 많이 처리
+
+•	Dispatchers.Main
+- 주로 UI 스레드를 다루는 용도(안드로이드 등)
+- 서버(Ktor) 환경에서는 쓰이지 않습니다.
+
+```
+// Dispatcher 예시
+CoroutineScope(Dispatchers.IO).launch {
+    // 네트워크 호출, 파일 읽기 등 I/O 작업
+    val result = doNetworkCall()
+    println(result)
+}
+```
+
+#### CoroutineScope
+- 코루틴들이 실행될 **범위(컨텍스트)**를 의미 즉 코루틴이 동작하는 범위를 말함
+- 예를 들어, 특정 클래스가 CoroutineScope를 구현하면 해당 클래스의 생명주기에 맞춰 코루틴을 관리할 수 있습니다.
+- 스코프에 속한 모든 코루틴이 스코프의 수명에 따라 동작하고 종료됩니다.
+- Job + Dispatcher를 조합하여 스코프를 생성할 수 있습니다.
+
+※ 부모 스코프와 자식 스코프
+- 자식 스코프: 부모 스코프 안에서 실행되는 실제 코루틴들
+- 부모 스코프가 사라지면(취소 되거나 함수가 종료) 그 안에 있는 자식 스코프(코루틴)도 모두 정리됩니다.
+```kotlin
+// 부모 스코프
+val parentJob = Job()
+val parentScope = CoroutineScope(Dispatchers.Default + parentJob)
+
+fun startAsyncTasks() {
+    // 자식 코루틴들
+    parentScope.launch {
+        // 작업 1
+    }
+    parentScope.launch {
+        // 작업 2
+    }
+}
+
+// 부모 스코프가 필요 없어지면
+fun stopAllTasks() {
+    parentJob.cancel() // 부모 Job 취소 -> 모든 자식 코루틴 종료
+}
+```
+
+#### runBlocking
+- 해당 블록이 완료될 때까지 현재 스레드를 차단합니다.
+- 주로 테스트 코드나 메인 함수에서 동기적으로 코루틴을 실행할 때 사용합니다.
+
+```kotlin
+fun main() = runBlocking {
+    // 이 블록 내의 모든 코루틴 동작이 완료될 때까지 메인 스레드를 차단
+    println("Start")
+    // 실제 비동기 코드를 넣거나 테스트 환경에서 사용
+    println("End")
+}
+```
+
+#### launch
+- 반환값이 필요 없는 작업(예: UI 갱신, 로그 작성 등)을 비동기로 처리할 때 활용합니다.
+- 경량 스레드로 동시 실행 가능하며, 완료 시점을 명시적으로 기다리지 않아도 됩니다.
+
+```kotlin
+fun main() = runBlocking {
+    launch {
+        println("Launch 1: ${Thread.currentThread().name}")
+    }
+    println("Main: ${Thread.currentThread().name}")
+}
+```
+
+#### async
+- 결과값을 받아야 할 때 사용하는 코루틴 빌더입니다.
+- Deferred<T>를 반환하며, **await()**를 통해 결과값을 가져올 수 있습니다.
+
+```kotlin
+fun main() = runBlocking {
+    val deferredResult = async {
+        // 비동기 연산 (예: 서버에서 데이터 받아오기)
+        "Fetched Data"
+    }
+    println("Result: ${deferredResult.await()}")
+}
+```
+
+#### Flow(Rx 유사 스트림)
+	•	RxJava 같은 리액티브 스트림 방식과 유사한 기능을 제공하며, 체이닝을 통해 데이터 흐름을 변환·처리할 수 있습니다.
+	•	주로 안드로이드나 클라이언트 진영에서 많이 사용하며, 서버 사이드에서는 필요나 호환성에 따라 선택적으로 도입합니다.
+
+	정리
+- 코루틴은 하나의 스레드에서 여러 비동기 동작을 효율적으로 처리하기 위한 방법이며, launch와 async로 각각 리턴 유무를 구분해 사용할 수 있습니다.
+- runBlocking은 주로 테스트나 메인 진입점에서 동작을 동기적으로 보장하기 위해 활용합니다.- Flow는 Rx 같은 스트림 방식과 유사하나, 안드로이드 등에서 비동기 데이터 흐름을 간결하게 관리할 때 주로 사용합니다.
 
 ```kotlin
 import io.ktor.client.*
@@ -76,7 +211,17 @@ fun main() = runBlocking {
 - Structured Concurrency(구조화된 동시성)
 - 부모 스코프가 취소되면 자식 코루틴도 같이 취소되는 형태로, 메모리 누수나 예외 전파 문제를 예방합니다.
 
+#### 구조화된 동시성(Structured Concurrency)
+부모 스코프가 자식 코루틴들의 생명주기를 완전히 책임져서,
+비동기 작업이 엉뚱한 데서 끝없이 돌아가는 문제를 막는 구조 라고 생각하면 됩니다.
+
+	1.	자식 코루틴은 반드시 부모 스코프 안에서 시작.
+	2.	부모 스코프가 끝나거나 에러로 취소되면 자식들도 자동 중단.
+	3.	덕분에 비동기 로직이 흩어져서 제멋대로 실행되지 않으며, 메모리 누수도 예방 가능합니다.
+
 ## 4. Ktor 간단하게 맛보기(인텔리제이 CE 기준)
+Ktor는 자체적으로 코루틴 기반 서버 프레임워크입니다
+
 1. https://ktor.io/ 에 들어가서 start 버튼을 누른다.
 2. New Ktor Project 옆 Project artifcat에 원하는 프로젝트 패키지명 작성(Ktor는 Netty 기반으로 동작)
 3. 아래 프로젝트에 원하는 Plugins 추가해준다. (다양하게 있지만 보통 CORS, kotlinx.serialization 등을 Add 함)
@@ -84,19 +229,27 @@ fun main() = runBlocking {
 5. 미쳐 추가 하지못한 plugin들도 Gradle.kts에 코틀린 문법으로 추가 할수 있으니 걱정 안해도 된다.
 
 
-#### ktor Routing
+#### ktor 코루틴 사용 하여 API Routing 처리
 - 라우팅(Routing)
 
 ```kotlin
-routing {
-    get("/") {
-        call.respondText("Hello, Ktor!")
-    }
+fun main() {
+    embeddedServer(Netty, port = 8080) {
+        routing {
+            get("/users") {
+                // suspend 함수 호출 (비동기 DB 액세스 시뮬레이션)
+                val users = fetchUsersFromDB()
+                call.respond(HttpStatusCode.OK, users)
+            }
+        }
+    }.start(wait = true)
+}
 
-    get("/user/{id}") {
-        val id = call.parameters["id"]
-        call.respondText("User ID: $id")
-    }
+// 예시 suspend 함수: DB 조회 가정 (I/O -> Dispatchers.IO)
+suspend fun fetchUsersFromDB(): List<String> = withContext(Dispatchers.IO) {
+    // 실제 DB 코드 대신, 예시로 지연
+    kotlinx.coroutines.delay(500)
+    listOf("Alice", "Bob", "Charlie")
 }
 ```
 관련 내용 다음주 설명
