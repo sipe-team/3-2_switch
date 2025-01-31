@@ -1,0 +1,26 @@
+# 기본 Dockerfile 문법에 익숙해져 봅시다.
+# https://hub.docker.com/_/gcc
+# image-이름:image-tag
+
+FROM gcc:latest
+
+# COPY를 통해 원하는 파일을 image 내부에 복사할 수 있어요.
+# COPY <호스트의 파일 경로> <이미지 내부의 파일 경로>
+
+# 시작 위치를 /test로 설정하는 방법 (pwd: /test)
+WORKDIR /test
+
+# 현 위치 (dockerfile 위치)에 있는 test.c 파일을 /test/test.c로 복사해요.
+COPY ./test.c ./test.c
+# 여기까지는 "한 줄 한 줄이 Layer임"
+
+# 컴파일 해야겠죠?
+# cli로 치는 명령어들은 RUN으로 적어요.
+# cli로 c파일을 컴파일 하려면 gcc <SRC> -o <TARGET>
+
+RUN gcc test.c -o test
+
+
+# 컨테이너가 시작되었을 때 실행할 명령어 (shell)
+# /bin/bash ./test
+ENTRYPOINT [ "./test" ]
